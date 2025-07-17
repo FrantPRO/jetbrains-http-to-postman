@@ -1,409 +1,255 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+	"regexp"
 	"strings"
-	"testing"
+	"time"
 )
 
-// Test helper functions
-func createTempFile(t *testing.T, content string) string {
-	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "test.http")
-	
-	err := os.WriteFile(tmpFile, []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
-	
-	return tmpFile
+type Collection struct {
+	Info  Info   `json:"info"`
+	Items []Item `json:"items"`
 }
 
-func readJSONFile(t *testing.T, filename string) Collection {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		t.Fatalf("Failed to read JSON file: %v", err)
-	}
-	
-	var collection Collection
-	err = json.Unmarshal(data, &collection)
-	if err != nil {
-		t.Fatalf("Failed to unmarshal JSON: %v", err)
-	}
-	
-	return collection
+type Info struct {
+	Name   string `json:"name"`
+	Schema string `json:"schema"`
 }
 
-func TestSimpleGETRequest(t *testing.T) {
-	httpContent := `GET https://api.example.com/users
-Accept: application/json
-Authorization: Bearer token123
-
-###`
-
-	inputFile := createTempFile(t, httpContent)
-	outputFile := filepath.Join(t.TempDir(), "output.json")
-	
-	err := convertHTTPToPostman(inputFile, outputFile)
-	if err != nil {
-		t.Fatalf("Conversion failed: %v", err)
-	}
-	
-	collection := readJSONFile(t, outputFile)
-	
-	// Verify collection structure
-	if len(collection.Items) != 1 {
-		t.Errorf("Expected 1 item, got %d", len(collection.Items))
-	}
-	
-	item := collection.Items[0]
-	if item.Name != "request-1" {
-		t.Errorf("Expected name 'request-1', got '%s'", item.Name)
-	}
-	
-	if item.Request.Method != "GET" {
-		t.Errorf("Expected method 'GET', got '%s'", item.Request.Method)
-	}
-	
-	if item.Request.URL.Raw != "https://api.example.com/users" {
-		t.Errorf("Expected URL 'https://api.example.com/users', got '%s'", item.Request.URL.Raw)
-	}
-	
-	if item.Request.URL.Protocol != "https" {
-		t.Errorf("Expected protocol 'https', got '%s'", item.Request.URL.Protocol)
-	}
-	
-	expectedHost := []string{"api", "example", "com"}
-	if len(item.Request.URL.Host) != len(expectedHost) {
-		t.Errorf("Expected host %v, got %v", expectedHost, item.Request.URL.Host)
-	}
-	
-	expectedPath := []string{"users"}
-	if len(item.Request.URL.Path) != len(expectedPath) {
-		t.Errorf("Expected path %v, got %v", expectedPath, item.Request.URL.Path)
-	}
-	
-	// Check headers
-	if len(item.Request.Header) != 2 {
-		t.Errorf("Expected 2 headers, got %d", len(item.Request.Header))
-	}
-	
-	acceptHeader := item.Request.Header[0]
-	if acceptHeader.Key != "Accept" || acceptHeader.Value != "application/json" {
-		t.Errorf("Expected Accept header, got %v", acceptHeader)
-	}
-	
-	authHeader := item.Request.Header[1]
-	if authHeader.Key != "Authorization" || authHeader.Value != "Bearer token123" {
-		t.Errorf("Expected Authorization header, got %v", authHeader)
-	}
+type Item struct {
+	Name    string  `json:"name"`
+	Request Request `json:"request"`
 }
 
-func TestPOSTRequestWithJSON(t *testing.T) {
-	httpContent := `POST https://api.example.com/users
-Content-Type: application/json
-
-{
-  "name": "John Doe",
-  "email": "john@example.com"
+type Request struct {
+	Method string            `json:"method"`
+	Header []Header          `json:"header"`
+	Body   Body              `json:"body"`
+	URL    URL               `json:"url"`
 }
 
-###`
-
-	inputFile := createTempFile(t, httpContent)
-	outputFile := filepath.Join(t.TempDir(), "output.json")
-	
-	err := convertHTTPToPostman(inputFile, outputFile)
-	if err != nil {
-		t.Fatalf("Conversion failed: %v", err)
-	}
-	
-	collection := readJSONFile(t, outputFile)
-	
-	if len(collection.Items) != 1 {
-		t.Errorf("Expected 1 item, got %d", len(collection.Items))
-	}
-	
-	item := collection.Items[0]
-	if item.Request.Method != "POST" {
-		t.Errorf("Expected method 'POST', got '%s'", item.Request.Method)
-	}
-	
-	// Check body
-	if item.Request.Body.Mode != "raw" {
-		t.Errorf("Expected body mode 'raw', got '%s'", item.Request.Body.Mode)
-	}
-	
-	expectedBody := `{
-  "name": "John Doe",
-  "email": "john@example.com"
-}`
-	
-	if strings.TrimSpace(item.Request.Body.Raw) != strings.TrimSpace(expectedBody) {
-		t.Errorf("Expected body:\n%s\nGot:\n%s", expectedBody, item.Request.Body.Raw)
-	}
-	
-	// Check body options
-	if item.Request.Body.Options == nil {
-		t.Error("Expected body options to be set")
-	}
+type Header struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+	Type  string `json:"type"`
 }
 
-func TestRequestWithQueryParameters(t *testing.T) {
-	httpContent := `GET https://api.example.com/users?page=1&limit=10&sort=name
-Accept: application/json
-
-###`
-
-	inputFile := createTempFile(t, httpContent)
-	outputFile := filepath.Join(t.TempDir(), "output.json")
-	
-	err := convertHTTPToPostman(inputFile, outputFile)
-	if err != nil {
-		t.Fatalf("Conversion failed: %v", err)
-	}
-	
-	collection := readJSONFile(t, outputFile)
-	
-	if len(collection.Items) != 1 {
-		t.Errorf("Expected 1 item, got %d", len(collection.Items))
-	}
-	
-	item := collection.Items[0]
-	
-	// Check query parameters
-	expectedParams := []QueryParam{
-		{Key: "page", Value: "1"},
-		{Key: "limit", Value: "10"},
-		{Key: "sort", Value: "name"},
-	}
-	
-	if len(item.Request.URL.Query) != len(expectedParams) {
-		t.Errorf("Expected %d query params, got %d", len(expectedParams), len(item.Request.URL.Query))
-	}
-	
-	for i, expected := range expectedParams {
-		actual := item.Request.URL.Query[i]
-		if actual.Key != expected.Key || actual.Value != expected.Value {
-			t.Errorf("Expected query param %v, got %v", expected, actual)
-		}
-	}
+type Body struct {
+	Mode    string                 `json:"mode,omitempty"`
+	Raw     string                 `json:"raw,omitempty"`
+	Options map[string]interface{} `json:"options,omitempty"`
 }
 
-func TestMultipleRequests(t *testing.T) {
-	httpContent := `GET https://api.example.com/users
-Accept: application/json
-
-###
-
-POST https://api.example.com/users
-Content-Type: application/json
-
-{
-  "name": "Jane Doe"
+type URL struct {
+	Raw      string       `json:"raw"`
+	Protocol string       `json:"protocol,omitempty"`
+	Host     []string     `json:"host,omitempty"`
+	Path     []string     `json:"path,omitempty"`
+	Query    []QueryParam `json:"query,omitempty"`
 }
 
-###
-
-DELETE https://api.example.com/users/123
-Authorization: Bearer token123
-
-###`
-
-	inputFile := createTempFile(t, httpContent)
-	outputFile := filepath.Join(t.TempDir(), "output.json")
-	
-	err := convertHTTPToPostman(inputFile, outputFile)
-	if err != nil {
-		t.Fatalf("Conversion failed: %v", err)
-	}
-	
-	collection := readJSONFile(t, outputFile)
-	
-	if len(collection.Items) != 3 {
-		t.Errorf("Expected 3 items, got %d", len(collection.Items))
-	}
-	
-	// Check first request
-	if collection.Items[0].Request.Method != "GET" {
-		t.Errorf("Expected first request method 'GET', got '%s'", collection.Items[0].Request.Method)
-	}
-	
-	// Check second request
-	if collection.Items[1].Request.Method != "POST" {
-		t.Errorf("Expected second request method 'POST', got '%s'", collection.Items[1].Request.Method)
-	}
-	
-	if collection.Items[1].Request.Body.Mode != "raw" {
-		t.Errorf("Expected second request body mode 'raw', got '%s'", collection.Items[1].Request.Body.Mode)
-	}
-	
-	// Check third request
-	if collection.Items[2].Request.Method != "DELETE" {
-		t.Errorf("Expected third request method 'DELETE', got '%s'", collection.Items[2].Request.Method)
-	}
-	
-	if collection.Items[2].Request.URL.Raw != "https://api.example.com/users/123" {
-		t.Errorf("Expected third request URL 'https://api.example.com/users/123', got '%s'", collection.Items[2].Request.URL.Raw)
-	}
+type QueryParam struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
-func TestRequestWithComments(t *testing.T) {
-	httpContent := `# This is a comment
-GET https://api.example.com/users
-# Another comment
-Accept: application/json
-
-###`
-
-	inputFile := createTempFile(t, httpContent)
-	outputFile := filepath.Join(t.TempDir(), "output.json")
-	
-	err := convertHTTPToPostman(inputFile, outputFile)
-	if err != nil {
-		t.Fatalf("Conversion failed: %v", err)
+func main() {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: go run main.go <input.http> <output.json>")
+		os.Exit(1)
 	}
-	
-	collection := readJSONFile(t, outputFile)
-	
-	if len(collection.Items) != 1 {
-		t.Errorf("Expected 1 item, got %d", len(collection.Items))
-	}
-	
-	// Comments should be ignored, only headers and request should remain
-	item := collection.Items[0]
-	if len(item.Request.Header) != 1 {
-		t.Errorf("Expected 1 header (comments should be ignored), got %d", len(item.Request.Header))
-	}
-}
 
-func TestCollectionMetadata(t *testing.T) {
-	httpContent := `GET https://api.example.com/test
+	inputFile := os.Args[1]
+	outputFile := os.Args[2]
 
-###`
-
-	inputFile := createTempFile(t, httpContent)
-	outputFile := filepath.Join(t.TempDir(), "output.json")
-	
-	err := convertHTTPToPostman(inputFile, outputFile)
-	if err != nil {
-		t.Fatalf("Conversion failed: %v", err)
-	}
-	
-	collection := readJSONFile(t, outputFile)
-	
-	// Check collection info
-	if !strings.HasPrefix(collection.Info.Name, "jb-export-") {
-		t.Errorf("Expected collection name to start with 'jb-export-', got '%s'", collection.Info.Name)
-	}
-	
-	expectedSchema := "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
-	if collection.Info.Schema != expectedSchema {
-		t.Errorf("Expected schema '%s', got '%s'", expectedSchema, collection.Info.Schema)
-	}
-}
-
-func TestInvalidInput(t *testing.T) {
-	// Test with non-existent file
-	outputFile := filepath.Join(t.TempDir(), "output.json")
-	err := convertHTTPToPostman("non-existent.http", outputFile)
-	if err == nil {
-		t.Error("Expected error for non-existent input file")
-	}
-}
-
-func TestOneLineJSON(t *testing.T) {
-	httpContent := `POST https://api.example.com/users
-Content-Type: application/json
-
-{"name": "John", "age": 30}
-
-###`
-
-	inputFile := createTempFile(t, httpContent)
-	outputFile := filepath.Join(t.TempDir(), "output.json")
-	
-	err := convertHTTPToPostman(inputFile, outputFile)
-	if err != nil {
-		t.Fatalf("Conversion failed: %v", err)
-	}
-	
-	collection := readJSONFile(t, outputFile)
-	
-	if len(collection.Items) != 1 {
-		t.Errorf("Expected 1 item, got %d", len(collection.Items))
-	}
-	
-	item := collection.Items[0]
-	expectedBody := `{"name": "John", "age": 30}`
-	
-	if strings.TrimSpace(item.Request.Body.Raw) != expectedBody {
-		t.Errorf("Expected body '%s', got '%s'", expectedBody, item.Request.Body.Raw)
-	}
-}
-
-// Benchmark test
-func BenchmarkConvertHTTPToPostman(b *testing.B) {
-	httpContent := `GET https://api.example.com/users
-Accept: application/json
-Authorization: Bearer token123
-
-###
-
-POST https://api.example.com/users
-Content-Type: application/json
-
-{
-  "name": "John Doe",
-  "email": "john@example.com"
-}
-
-###`
-
-	tmpDir := b.TempDir()
-	inputFile := filepath.Join(tmpDir, "input.http")
-	outputFile := filepath.Join(tmpDir, "output.json")
-	
-	err := os.WriteFile(inputFile, []byte(httpContent), 0644)
-	if err != nil {
-		b.Fatalf("Failed to create input file: %v", err)
-	}
-	
-	b.ResetTimer()
-	
-	for i := 0; i < b.N; i++ {
-		err := convertHTTPToPostman(inputFile, outputFile)
-		if err != nil {
-			b.Fatalf("Conversion failed: %v", err)
-		}
-	}
-}
-
-// Example usage test
-func ExampleConvertHTTPToPostman() {
-	httpContent := `GET https://api.example.com/users
-Accept: application/json
-
-###`
-
-	// Create temp files
-	tmpDir := "/tmp"
-	inputFile := filepath.Join(tmpDir, "example.http")
-	outputFile := filepath.Join(tmpDir, "example.json")
-	
-	// Write example content
-	os.WriteFile(inputFile, []byte(httpContent), 0644)
-	
-	// Convert
 	err := convertHTTPToPostman(inputFile, outputFile)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
-		return
+		os.Exit(1)
 	}
-	
-	fmt.Println("Conversion successful!")
-	// Output: Conversion successful!
+
+	fmt.Printf("Successfully converted %s to %s\n", inputFile, outputFile)
+}
+
+func convertHTTPToPostman(inputFile, outputFile string) error {
+	file, err := os.Open(inputFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	var items []Item
+	var item Item
+	var req Request
+	var headers []Header
+	var body Body
+	var url URL
+	var query []QueryParam
+	var data strings.Builder
+	count := 0
+	startedJSON := false
+
+	// Initialize first item
+	item = Item{Request: Request{}}
+	req = Request{
+		Header: []Header{},
+		Body:   Body{},
+		URL:    URL{Query: []QueryParam{}},
+	}
+
+	// Regex patterns
+	httpMethodRegex := regexp.MustCompile(`^(GET|PUT|POST|DELETE|OPTIONS)\s+.+`)
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		switch {
+		case strings.HasPrefix(line, "# "):
+			// Skip comments
+			continue
+
+		case httpMethodRegex.MatchString(line):
+			count++
+			item.Name = fmt.Sprintf("request-%d", count)
+			
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				req.Method = parts[0]
+				rawURL := parts[1]
+				url.Raw = rawURL
+
+				// Parse URL
+				if strings.Contains(rawURL, "://") {
+					protocolParts := strings.Split(rawURL, "://")
+					url.Protocol = protocolParts[0]
+					
+					cleanURL := protocolParts[1]
+					if strings.Contains(cleanURL, "?") {
+						cleanURL = strings.Split(cleanURL, "?")[0]
+					}
+					
+					if strings.Contains(cleanURL, "/") {
+						urlParts := strings.Split(cleanURL, "/")
+						url.Host = strings.Split(urlParts[0], ".")
+						if len(urlParts) > 1 {
+							url.Path = urlParts[1:]
+						}
+					} else {
+						url.Host = strings.Split(cleanURL, ".")
+					}
+				} else {
+					urlParts := strings.Split(rawURL, "/")
+					if len(urlParts) > 0 {
+						url.Host = strings.Split(urlParts[0], ".")
+					}
+				}
+
+				// Parse query parameters
+				if strings.Contains(rawURL, "?") {
+					queryParts := strings.Split(rawURL, "?")
+					if len(queryParts) > 1 {
+						queryString := queryParts[1]
+						params := strings.Split(queryString, "&")
+						for _, param := range params {
+							if strings.Contains(param, "=") {
+								kv := strings.Split(param, "=")
+								query = append(query, QueryParam{
+									Key:   strings.TrimSpace(kv[0]),
+									Value: strings.TrimSpace(kv[1]),
+								})
+							}
+						}
+					}
+				}
+			}
+
+		case strings.Contains(line, ":") && !startedJSON:
+			// Parse headers
+			headerParts := strings.SplitN(line, ":", 2)
+			if len(headerParts) == 2 {
+				header := Header{
+					Key:   strings.TrimSpace(headerParts[0]),
+					Value: strings.TrimSpace(headerParts[1]),
+					Type:  "text",
+				}
+				headers = append(headers, header)
+			}
+
+		case strings.HasPrefix(line, "{"):
+			// Start of JSON body
+			body.Mode = "raw"
+			body.Options = map[string]interface{}{
+				"raw": map[string]interface{}{
+					"language": "json",
+				},
+			}
+			startedJSON = true
+			data.WriteString(line + "\n")
+			
+			if strings.HasSuffix(line, "}") {
+				body.Raw = strings.TrimSpace(data.String())
+				startedJSON = false
+			}
+
+		case strings.Contains(line, ":") && startedJSON:
+			// Continue JSON body
+			data.WriteString(line + "\n")
+
+		case strings.HasSuffix(line, "}") && startedJSON:
+			// End of JSON body
+			data.WriteString(line)
+			body.Raw = strings.TrimSpace(data.String())
+			startedJSON = false
+
+		case strings.HasPrefix(line, "###"):
+			// End of request - save current item and reset
+			req.Header = headers
+			req.Body = body
+			req.URL = url
+			req.URL.Query = query
+			item.Request = req
+			items = append(items, item)
+
+			// Reset for next request
+			item = Item{Request: Request{}}
+			req = Request{
+				Header: []Header{},
+				Body:   Body{},
+				URL:    URL{Query: []QueryParam{}},
+			}
+			headers = []Header{}
+			body = Body{}
+			url = URL{}
+			query = []QueryParam{}
+			data.Reset()
+			startedJSON = false
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+
+	// Create collection
+	today := time.Now().Format("20060102150405")
+	collection := Collection{
+		Info: Info{
+			Name:   fmt.Sprintf("jb-export-%s", today),
+			Schema: "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		},
+		Items: items,
+	}
+
+	// Write output file
+	output, err := json.MarshalIndent(collection, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(outputFile, output, 0644)
 }
