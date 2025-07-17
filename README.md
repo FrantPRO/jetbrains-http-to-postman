@@ -1,12 +1,20 @@
 # jetbrains-http-to-postman
 Convert JetBrains HTTP Client files (.http) to Postman collections
 
-Quick Start
+## Quick Start
+
+### Run directly:
 ```bash
-go run main.go input.http output.json
+go run http_to_postman.go input.http output.json
 ```
 
-Features
+### Build and run:
+```bash
+go build -o jetbrains-http-to-postman
+./jetbrains-http-to-postman input.http output.json
+```
+
+## Features
 
 ✅ HTTP methods (GET, POST, PUT, DELETE, OPTIONS)
 ✅ Headers and query parameters
@@ -15,7 +23,7 @@ Features
 ✅ Comments support
 ✅ URL parsing with protocol, host, and path
 
-Input Format
+## Input Format
 ```http
 GET https://api.example.com/users?page=1
 Accept: application/json
@@ -31,11 +39,27 @@ Content-Type: application/json
   "email": "john@example.com"
 }
 ```
-Output
+## Output
 Generates a Postman collection JSON file that can be imported directly into Postman.
-Requirements
 
-Go 1.24+
+## Development
 
-License
+### Testing
+```bash
+go test -v        # Run all tests with verbose output
+go test           # Run tests
+go test -bench=.  # Run benchmarks
+```
+
+### Code Quality
+```bash
+go fmt ./...      # Format code
+go vet ./...      # Check for common mistakes
+```
+
+## Requirements
+
+Go 1.24.4+
+
+## License
 MIT
